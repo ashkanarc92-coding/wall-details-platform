@@ -74,21 +74,35 @@ def detect_provinces(df_sheet0):
 # ------------------- کمکی: پیدا کردن شهرها برای استان در Sheet1 -------------------
 def detect_cities_for_province(df_sheet1, province_code):
     """
-    خواندن شهرهای مربوط به استان انتخابی.
-    - نام شهرها در ستون چهارم (index 3)
-    - جستجو براساس کد استان (P-XX)
+    شهرهای مربوط به استان انتخابی را از ستون چهارم (index 3) استخراج می‌کند.
+    در فایل، شهرهای هر استان در چند ردیف بعد از ردیف حاوی کد استان آمده‌اند.
     """
-    pattern_c = re.compile(r"(?i)\bC-\d{2}-\d{2}\b")  # برای پیدا کردن کد شهر
+    pattern_p = re.compile(r"(?i)\bP-\d{2}\b")
+    pattern_c = re.compile(r"(?i)\bC-\d{2}-\d{2}\b")
     df = df_sheet1
     rows, cols = df.shape
+
     found = []
+    current_province = None
 
     for i in range(rows):
-        # بررسی اینکه این ردیف مربوط به استان انتخابی است یا خیر
         row_vals = [str(df.iat[i, j]).strip() for j in range(cols)]
         joined = " | ".join(row_vals)
-        if province_code.lower() in joined.lower():
-            # کد شهر
+
+        # اگر در این ردیف کد استان وجود دارد، به‌روزرسانی استان فعلی
+        if pattern_p.search(joined):
+            current_province = pattern_p.search(joined).group(0).upper()
+
+        # فقط اگر استان فعلی برابر استان انتخابی است، شهرها را جمع کن
+        if current_province == province_code:
+            # نام شهر در ستون چهارم (index 3)
+            city_name = ""
+            if cols > 3:
+                city_name = str(df.iat[i, 3]).strip()
+                if city_name.lower() in ["", "nan", "none"]:
+                    city_name = ""
+
+            # کد شهر (در صورت وجود)
             city_code = ""
             for j in range(cols):
                 cell = row_vals[j]
@@ -96,20 +110,18 @@ def detect_cities_for_province(df_sheet1, province_code):
                     city_code = pattern_c.search(cell).group(0).upper()
                     break
 
-            # نام شهر از ستون چهارم (index 3)
-            city_name = ""
-            if cols > 3:
-                city_name = str(df.iat[i, 3]).strip()
-                if city_name.lower() in ["", "nan", "none"]:
-                    city_name = ""
-
-            # اگر نام خالی بود، از کد شهر استفاده کن
+            # اگر نام خالی بود ولی کد وجود داشت، از کد استفاده کن
             if not city_name and city_code:
                 city_name = city_code
 
+            # اگر شهر پیدا شد، اضافه کن
             if city_name:
                 if (city_code, city_name) not in found:
                     found.append((city_code if city_code else city_name, city_name))
+
+        # اگر استان جدیدی پیدا شد (با کد متفاوت از استان انتخابی)، جمع‌آوری متوقف می‌شود
+        elif current_province and current_province != province_code and found:
+            break
 
     # حذف تکراری‌ها
     unique = []
