@@ -29,13 +29,10 @@ def detect_provinces(df_sheet0):
             cell = df_sheet0.iat[i, j].strip()
             if pattern_p.search(cell):
                 code = pattern_p.search(cell).group(0).upper()
+                # فرض: ستون بعدی نام استان است
                 name = ""
-                for k in range(1, 4):
-                    if j + k < cols:
-                        cand = df_sheet0.iat[i, j + k].strip()
-                        if cand and not pattern_p.search(cand):
-                            name = cand
-                            break
+                if j + 1 < cols:
+                    name = df_sheet0.iat[i, j + 1].strip()
                 if not name:
                     name = code
                 if (code, name) not in provinces:
@@ -45,31 +42,25 @@ def detect_provinces(df_sheet0):
 # ------------------- استخراج شهرها بر اساس استان -------------------
 def detect_cities_for_province(df_sheet1, province_code):
     """
-    ساختار Sheet1 معمولاً شامل ستون‌های:
-    [کد استان | نام استان | کد شهر | نام شهر]
+    ساختار Sheet1 معمولاً:
+    [کد استان | نام استان | کد شهر | نام شهر | سایر ستون‌ها...]
     """
     df = df_sheet1.copy()
     df = df.replace("", pd.NA).dropna(how="all")
-    cols = list(df.columns)
+    df = df.reset_index(drop=True)
 
-    prov_col, city_code_col, city_name_col = None, None, None
-    for i, c in enumerate(cols):
-        sample_vals = " ".join(df[c].astype(str).head(15).tolist())
-        if re.search(r"P-\d{2}", sample_vals, re.I):
-            prov_col = c
-        if re.search(r"C-\d{2}-\d{2}", sample_vals, re.I):
-            city_code_col = c
-        if re.search(r"[\u0600-\u06FF]", sample_vals) and not re.search(r"P-|C-", sample_vals, re.I):
-            city_name_col = c
+    # فقط چهار ستون اول را نگه داریم تا از ستون‌های انرژی و ... جلوگیری شود
+    df = df.iloc[:, :4] if df.shape[1] > 4 else df
 
-    if prov_col is None:
-        prov_col = cols[0]
-    if city_code_col is None:
-        city_code_col = cols[2] if len(cols) > 2 else cols[0]
-    if city_name_col is None:
-        city_name_col = cols[3] if len(cols) > 3 else cols[-1]
+    # نام‌گذاری ایمن ستون‌ها
+    cols = df.columns
+    prov_code_col = cols[0]
+    prov_name_col = cols[1] if len(cols) > 1 else cols[0]
+    city_code_col = cols[2] if len(cols) > 2 else cols[-1]
+    city_name_col = cols[3] if len(cols) > 3 else cols[-1]
 
-    filtered = df[df[prov_col].astype(str).str.contains(province_code, case=False, na=False)]
+    # فیلتر ردیف‌ها برای استان انتخابی
+    filtered = df[df[prov_code_col].astype(str).str.contains(province_code, case=False, na=False)]
 
     cities = []
     for _, row in filtered.iterrows():
@@ -80,6 +71,7 @@ def detect_cities_for_province(df_sheet1, province_code):
         if c_code or c_name:
             cities.append((c_code, c_name))
 
+    # حذف تکراری‌ها
     unique_cities = []
     seen = set()
     for code, name in cities:
@@ -107,70 +99,4 @@ def extract_details_sheet3(df_sheet3, selected_province_code, selected_city_iden
             elif cond_city and not matched_rows.any():
                 matched_rows.iat[i] = True
     if matched_rows.any():
-        res = df.loc[matched_rows.values, :].reset_index(drop=True)
-        res.columns = [f"Column_{i+1}" for i in range(res.shape[1])]
-        return res
-    else:
-        return pd.DataFrame()
-
-# ------------------- رابط کاربری Streamlit -------------------
-st.title("🧱 Wall Detail Platform — Tehran-based Material Dataset")
-st.write("ابتدا استان را انتخاب کنید، سپس شهر مربوطه را انتخاب کنید و در نهایت جزئیات دیوار نمایش داده می‌شود.")
-
-# بارگذاری فایل اکسل
-try:
-    sheets = load_all_sheets(EXCEL_PATH)
-except Exception as e:
-    st.error(f"❌ خطا در خواندن فایل اکسل: {e}")
-    st.stop()
-
-sheet_names = list(sheets.keys())
-sheet0_key = next((k for k in sheet_names if "0" in k.lower()), sheet_names[0])
-sheet1_key = next((k for k in sheet_names if "1" in k.lower()), sheet_names[1] if len(sheet_names) > 1 else sheet_names[0])
-sheet3_key = next((k for k in sheet_names if "3" in k.lower()), sheet_names[-1])
-
-df0 = sheets[sheet0_key]
-df1 = sheets[sheet1_key]
-df3 = sheets[sheet3_key]
-
-# --- انتخاب استان ---
-provs = detect_provinces(df0)
-if not provs:
-    st.error("هیچ استانی در Sheet0 یافت نشد.")
-    st.stop()
-
-province_labels = [name for code, name in provs]
-province_idx = st.selectbox("انتخاب استان:", range(len(provs)), format_func=lambda i: province_labels[i])
-selected_province_code, selected_province_name = provs[province_idx][0], provs[province_idx][1]
-
-# --- انتخاب شهر ---
-cities = detect_cities_for_province(df1, selected_province_code)
-if not cities:
-    st.warning("برای این استان، هیچ شهری یافت نشد.")
-    st.stop()
-
-city_labels = [name for code, name in cities]
-city_idx = st.selectbox("انتخاب شهر:", range(len(cities)), format_func=lambda i: city_labels[i])
-selected_city_identifier = cities[city_idx][0]
-selected_city_name = cities[city_idx][1]
-
-# --- نمایش دیتیل ---
-if st.button("نمایش جزئیات دیوار"):
-    with st.spinner("در حال استخراج داده‌ها..."):
-        result_df = extract_details_sheet3(df3, selected_province_code, selected_city_identifier)
-        if result_df.empty:
-            st.warning("هیچ دیتیلی برای این شهر در Sheet3 پیدا نشد.")
-        else:
-            st.success(f"✅ {len(result_df)} ردیف دیتیل برای شهر '{selected_city_name}' یافت شد.")
-            st.dataframe(result_df, use_container_width=True)
-
-            buf = io.BytesIO()
-            with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-                result_df.to_excel(writer, index=False, sheet_name="Wall_Details")
-            buf.seek(0)
-            st.download_button(
-                label="📥 دانلود خروجی (Excel)",
-                data=buf,
-                file_name=f"Wall_Details_{selected_city_name}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+        res = df.loc[matched_rows.values, :].reset_index(drop]()
