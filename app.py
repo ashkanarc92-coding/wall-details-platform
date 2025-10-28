@@ -74,59 +74,70 @@ def detect_provinces(df_sheet0):
 # ------------------- کمکی: پیدا کردن شهرها برای استان در Sheet1 -------------------
 def detect_cities_for_province(df_sheet1, province_code):
     """
-    جستجو برای یافتن شهرهای مربوط به استان انتخاب‌شده (بر اساس نام شهر واقعی)
+    ورودی: df_sheet1 بدون header
+    خروجی: لیست نام/کد شهرهایی که با آن استان مربوطند
+    الگوریتم:
+      - جستجو در تمام سلول‌ها برای مقادیری که برابر province_code باشند (یا شامل آن).
+      - برای هر ردیفی که match داشت، تلاش می‌کنیم کد شهر (الگوی C-xx-yy) و/یا نام شهر را از همان ردیف استخراج کنیم.
+      - برمی‌گردانیم لیست یکتا (ترتیب: کد - نام اگر موجود باشد).
     """
-    pattern_city_code = re.compile(r"(?i)\bC-\d{2}-\d{2}\b")  # C-01-01
-    pattern_province_code = re.compile(r"(?i)\bP-\d{2}\b")
-    df = df_sheet1.copy()
+    pattern_c = re.compile(r"(?i)\bC-\d{2}-\d{2}\b")  # C-01-01 etc
+    df = df_sheet1
     rows, cols = df.shape
     found = []
-
+    # پیدا کردن ردیف‌هایی که province_code در آنها هست
     for i in range(rows):
         row_vals = [str(df.iat[i, j]).strip() for j in range(cols)]
         joined = " | ".join(row_vals)
-
-        # اگر کد استان در این ردیف وجود دارد
         if province_code.lower() in joined.lower():
+            # در همان ردیف به دنبال کد شهر و نام شهر بگرد
             city_code = ""
             city_name = ""
-
             for j in range(cols):
                 cell = row_vals[j]
-                # پیدا کردن کد شهر
-                if not city_code and pattern_city_code.search(cell):
-                    city_code = pattern_city_code.search(cell).group(0).upper()
-                # پیدا کردن نام شهر با حروف فارسی
-                if not city_name and re.search(r"[\u0600-\u06FF]", cell):
-                    # حذف مواردی که شامل "استان" یا شبیه "P-xx" هستند
-                    if not pattern_province_code.search(cell) and "استان" not in cell:
-                        city_name = cell.strip()
-
-            # اگر نام شهر پیدا نشد ولی کد شهر هست
-            if not city_name and city_code:
-                city_name = city_code
-
-            if city_name and (city_code, city_name) not in found:
-                found.append((city_code if city_code else city_name, city_name))
-
-    # اگر هنوز هیچ شهری پیدا نشد، کل فایل را برای کد شهر جستجو می‌کنیم
+                if not city_code and pattern_c.search(cell):
+                    city_code = pattern_c.search(cell).group(0).upper()
+                # فرض اینکه نام شهر معمولاً در یک ستون با حروف فارسی است: پیگیری اولین فیلد غیرکدی که طول > 1 و حاوی حرف فارسی باشه
+                if not city_name and len(cell) > 0:
+                    # ساده: اگر حروف فارسی در متن موجود باشد در نظر می‌گیریم نام است
+                    if re.search(r"[\u0600-\u06FF]", cell):
+                        city_name = cell
+            # fallback: اگر نام شهر خالی بود، شاید ستون خاصی وجود دارد؛ انتخاب اولین مقدار غیرخالی غیرکد
+            if not city_name:
+                for v in row_vals:
+                    if v and not pattern_c.search(v):
+                        city_name = v
+                        break
+            label = city_name if city_name else (city_code if city_code else "")
+            identifier = city_code if city_code else city_name
+            if identifier and (identifier, label) not in found:
+                found.append((identifier, label))
+    # اگر هیچ موردی پیدا نشد: تلاش کلی برای استخراج هر مقداری که الگوی C- را دارد
     if not found:
-        for i in range(rows):
-            for j in range(cols):
-                cell = str(df.iat[i, j]).strip()
-                if pattern_city_code.search(cell):
-                    code = pattern_city_code.search(cell).group(0).upper()
-                    found.append((code, code))
-
-    # حذف تکراری‌ها (بر اساس نام شهر)
-    unique = []
+        all_vals = df.values.ravel()
+        for v in all_vals:
+            v = str(v).strip()
+            if pattern_c.search(v):
+                code = pattern_c.search(v).group(0).upper()
+                # سعی برای گرفتن نام کنار آن (this is best-effort)
+                found.append((code, code))
+    # تبدیل به لیستی از برچسب‌ها برای selectbox
+    # برچسب بهتر: "C-01-01 — نامش" اگر هردو موجود باشند
+    labels = []
+    for ident, lab in found:
+        if ident and lab and ident != lab:
+            labels.append(f"{ident} — {lab}")
+        else:
+            labels.append(ident or lab)
+    # یکتا و مرتب
+    uniq = []
     seen = set()
-    for code, name in found:
-        if name not in seen:
-            unique.append((code, name))
-            seen.add(name)
+    for i, lab in enumerate(labels):
+        if lab not in seen:
+            uniq.append((found[i][0], lab))
+            seen.add(lab)
+    return uniq  # list of tuples (identifier, label)
 
-    return unique
 # ------------------- کمکی: استخراج دیتیل‌ها از Sheet3 -------------------
 def extract_details_sheet3(df_sheet3, selected_province_code, selected_city_identifier):
     """
@@ -245,4 +256,3 @@ if st.button("نمایش جزئیات دیوار برای شهر انتخابی"
             st.download_button("📥 دانلود خروجی (Excel)", data=buf,
                                file_name=f"Wall_Details_{selected_city_identifier}.xlsx",
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
